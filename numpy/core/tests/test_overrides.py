@@ -4,6 +4,9 @@ import os
 import tempfile
 from io import StringIO
 from unittest import mock
+import pickle
+
+import pytest
 
 import numpy as np
 from numpy.testing import (
@@ -11,8 +14,6 @@ from numpy.testing import (
 from numpy.core.overrides import (
     _get_implementing_args, array_function_dispatch,
     verify_matching_signatures)
-from numpy.compat import pickle
-import pytest
 
 
 def _return_not_implemented(self, *args, **kwargs):
@@ -241,6 +242,19 @@ class TestArrayFunctionDispatch:
         with assert_raises_regex(TypeError, 'no implementation found'):
             dispatched_one_arg(array)
 
+    def test_where_dispatch(self):
+
+        class DuckArray:
+            def __array_function__(self, ufunc, method, *inputs, **kwargs):
+                return "overridden"
+
+        array = np.array(1)
+        duck_array = DuckArray()
+
+        result = np.std(array, where=duck_array)
+
+        assert_equal(result, "overridden")
+
 
 class TestVerifyMatchingSignatures:
 
@@ -346,6 +360,17 @@ class TestArrayFunctionImplementation:
                 TypeError, "no implementation found for 'my.func'"):
             func(MyArray())
 
+    @pytest.mark.parametrize("name", ["concatenate", "mean", "asarray"])
+    def test_signature_error_message_simple(self, name):
+        func = getattr(np, name)
+        try:
+            # all of these functions need an argument:
+            func()
+        except TypeError as e:
+            exc = e
+
+        assert exc.args[0].startswith(f"{name}()")
+
     def test_signature_error_message(self):
         # The lambda function will be named "<lambda>", but the TypeError
         # should show the name as "func"
@@ -357,7 +382,7 @@ class TestArrayFunctionImplementation:
             pass
 
         try:
-            func(bad_arg=3)
+            func._implementation(bad_arg=3)
         except TypeError as e:
             expected_exception = e
 
@@ -365,6 +390,12 @@ class TestArrayFunctionImplementation:
             func(bad_arg=3)
             raise AssertionError("must fail")
         except TypeError as exc:
+            if exc.args[0].startswith("_dispatcher"):
+                # We replace the qualname currently, but it used `__name__`
+                # (relevant functions have the same name and qualname anyway)
+                pytest.skip("Python version is not using __qualname__ for "
+                            "TypeError formatting.")
+
             assert exc.args == expected_exception.args
 
     @pytest.mark.parametrize("value", [234, "this func is not replaced"])

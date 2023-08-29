@@ -21,7 +21,10 @@ from numpy.distutils.misc_util import mingw32
 # Binary compatibility version number. This number is increased whenever the
 # C-API is changed such that binary compatibility is broken, i.e. whenever a
 # recompile of extension modules is needed.
-C_ABI_VERSION = 0x01000009
+# NOTE: This is the version against which an extension module was compiled.
+#       As of now compiling against version 2 (0x02000000) yields version 1
+#       compatible binaries (subset).  See also NEP 53.
+C_ABI_VERSION = 0x02000000
 
 # Minor API version.  This number is increased whenever a change is made to the
 # C-API -- whether it breaks binary compatibility or not.  Some changes, such
@@ -48,7 +51,14 @@ C_ABI_VERSION = 0x01000009
 # 0x0000000f - 1.22.x
 # 0x00000010 - 1.23.x
 # 0x00000010 - 1.24.x
-C_API_VERSION = 0x00000010
+# 0x00000011 - 1.25.x
+# 0x00000012 - 2.0.x
+C_API_VERSION = 0x00000012
+
+# By default, when compiling downstream libraries against NumPy,
+# pick an older feature version.  For example, for 1.25.x we default to the
+# 1.19 API and support going back all the way to 1.15.x (if so desired).
+# This is set up in `numpyconfig.h`.
 
 class MismatchCAPIError(ValueError):
     pass
@@ -91,6 +101,10 @@ def check_api_version(apiversion, codegen_dir):
                f"checksum in core/codegen_dir/cversions.txt is {api_hash}. If "
                "functions were added in the C API, you have to update "
                f"C_API_VERSION in {__file__}."
+               "\n"
+               "Please make sure that new additions are guarded with "
+               "MinVersion() to make them unavailable when wishing support "
+               "for older NumPy versions."
                )
         raise MismatchCAPIError(msg)
 

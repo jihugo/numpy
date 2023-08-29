@@ -8,6 +8,7 @@ import contextlib
 import operator
 from operator import itemgetter, index as opindex, methodcaller
 from collections.abc import Mapping
+import pickle
 
 import numpy as np
 from . import format
@@ -21,17 +22,12 @@ from ._iotools import (
     ConverterLockError, ConversionWarning, _is_string_like,
     has_nested_fields, flatten_dtype, easy_dtype, _decode_line
     )
-
-from numpy.compat import (
-    asbytes, asstr, asunicode, os_fspath, os_PathLike,
-    pickle
-    )
+from numpy._utils import asunicode, asbytes
 
 
 __all__ = [
-    'savetxt', 'loadtxt', 'genfromtxt',
-    'recfromtxt', 'recfromcsv', 'load', 'save', 'savez',
-    'savez_compressed', 'packbits', 'unpackbits', 'fromregex', 'DataSource'
+    'savetxt', 'loadtxt', 'genfromtxt', 'load', 'save', 'savez', 'DataSource',
+    'savez_compressed', 'packbits', 'unpackbits', 'fromregex'
     ]
 
 
@@ -97,7 +93,7 @@ def zipfile_factory(file, *args, **kwargs):
     constructor.
     """
     if not hasattr(file, 'read'):
-        file = os_fspath(file)
+        file = os.fspath(file)
     import zipfile
     kwargs['allowZip64'] = True
     return zipfile.ZipFile(file, *args, **kwargs)
@@ -142,13 +138,13 @@ class NpzFile(Mapping):
     max_header_size : int, optional
         Maximum allowed size of the header.  Large headers may not be safe
         to load securely and thus require explicitly passing a larger value.
-        See :py:meth:`ast.literal_eval()` for details.
+        See :py:func:`ast.literal_eval()` for details.
         This option is ignored when `allow_pickle` is passed.  In that case
         the file is by definition trusted and the limit is unnecessary.
 
     Parameters
     ----------
-    fid : file or str
+    fid : file, str, or pathlib.Path
         The zipped archive to open. This is either a file-like object
         or a string containing the path to the archive.
     own_fid : bool, optional
@@ -167,6 +163,8 @@ class NpzFile(Mapping):
     >>> npz = np.load(outfile)
     >>> isinstance(npz, np.lib.npyio.NpzFile)
     True
+    >>> npz
+    NpzFile 'object' with keys x, y
     >>> sorted(npz.files)
     ['x', 'y']
     >>> npz['x']  # getitem access
@@ -178,6 +176,7 @@ class NpzFile(Mapping):
     # Make __exit__ safe if zipfile_factory raises an exception
     zip = None
     fid = None
+    _MAX_REPR_ARRAY_COUNT = 5
 
     def __init__(self, fid, own_fid=False, allow_pickle=False,
                  pickle_kwargs=None, *,
@@ -257,7 +256,23 @@ class NpzFile(Mapping):
             else:
                 return self.zip.read(key)
         else:
-            raise KeyError("%s is not a file in the archive" % key)
+            raise KeyError(f"{key} is not a file in the archive")
+
+    def __contains__(self, key):
+        return (key in self._files or key in self.files)
+
+    def __repr__(self):
+        # Get filename or default to `object`
+        if isinstance(self.fid, str):
+            filename = self.fid
+        else:
+            filename = getattr(self.fid, "name", "object")
+
+        # Get the name of arrays
+        array_names = ', '.join(self.files[:self._MAX_REPR_ARRAY_COUNT])
+        if len(self.files) > self._MAX_REPR_ARRAY_COUNT:
+            array_names += "..."
+        return f"NpzFile {filename!r} with keys: {array_names}"
 
 
 @set_module('numpy')
@@ -309,7 +324,7 @@ def load(file, mmap_mode=None, allow_pickle=False, fix_imports=True,
     max_header_size : int, optional
         Maximum allowed size of the header.  Large headers may not be safe
         to load securely and thus require explicitly passing a larger value.
-        See :py:meth:`ast.literal_eval()` for details.
+        See :py:func:`ast.literal_eval()` for details.
         This option is ignored when `allow_pickle` is passed.  In that case
         the file is by definition trusted and the limit is unnecessary.
 
@@ -405,7 +420,7 @@ def load(file, mmap_mode=None, allow_pickle=False, fix_imports=True,
             fid = file
             own_fid = False
         else:
-            fid = stack.enter_context(open(os_fspath(file), "rb"))
+            fid = stack.enter_context(open(os.fspath(file), "rb"))
             own_fid = True
 
         # Code to distinguish from NumPy binary files and pickles.
@@ -517,7 +532,7 @@ def save(file, arr, allow_pickle=True, fix_imports=True):
     if hasattr(file, 'write'):
         file_ctx = contextlib.nullcontext(file)
     else:
-        file = os_fspath(file)
+        file = os.fspath(file)
         if not file.endswith('.npy'):
             file = file + '.npy'
         file_ctx = open(file, "wb")
@@ -545,7 +560,7 @@ def savez(file, *args, **kwds):
 
     Parameters
     ----------
-    file : str or file
+    file : file, str, or pathlib.Path
         Either the filename (string) or an open file (file-like object)
         where the data will be saved. If file is a string or a Path, the
         ``.npz`` extension will be appended to the filename if it is not
@@ -631,14 +646,14 @@ def savez_compressed(file, *args, **kwds):
     Save several arrays into a single file in compressed ``.npz`` format.
 
     Provide arrays as keyword arguments to store them under the
-    corresponding name in the output file: ``savez(fn, x=x, y=y)``.
+    corresponding name in the output file: ``savez_compressed(fn, x=x, y=y)``.
 
-    If arrays are specified as positional arguments, i.e., ``savez(fn,
-    x, y)``, their names will be `arr_0`, `arr_1`, etc.
+    If arrays are specified as positional arguments, i.e.,
+    ``savez_compressed(fn, x, y)``, their names will be `arr_0`, `arr_1`, etc.
 
     Parameters
     ----------
-    file : str or file
+    file : file, str, or pathlib.Path
         Either the filename (string) or an open file (file-like object)
         where the data will be saved. If file is a string or a Path, the
         ``.npz`` extension will be appended to the filename if it is not
@@ -697,7 +712,7 @@ def _savez(file, args, kwds, compress, allow_pickle=True, pickle_kwargs=None):
     import zipfile
 
     if not hasattr(file, 'write'):
-        file = os_fspath(file)
+        file = os.fspath(file)
         if not file.endswith('.npz'):
             file = file + '.npz'
 
@@ -802,10 +817,11 @@ def _read(fname, *, delimiter=',', comment='#', quote='"',
           dtype=np.float64, encoding="bytes"):
     r"""
     Read a NumPy array from a text file.
+    This is a helper function for loadtxt.
 
     Parameters
     ----------
-    fname : str or file object
+    fname : file, str, or pathlib.Path
         The filename or the file to be read.
     delimiter : str, optional
         Field delimiter of the fields in line of the file.
@@ -862,30 +878,6 @@ def _read(fname, *, delimiter=',', comment='#', quote='"',
     -------
     ndarray
         NumPy array.
-
-    Examples
-    --------
-    First we create a file for the example.
-
-    >>> s1 = '1.0,2.0,3.0\n4.0,5.0,6.0\n'
-    >>> with open('example1.csv', 'w') as f:
-    ...     f.write(s1)
-    >>> a1 = read_from_filename('example1.csv')
-    >>> a1
-    array([[1., 2., 3.],
-           [4., 5., 6.]])
-
-    The second example has columns with different data types, so a
-    one-dimensional array with a structured data type is returned.
-    The tab character is used as the field delimiter.
-
-    >>> s2 = '1.0\t10\talpha\n2.3\t25\tbeta\n4.5\t16\tgamma\n'
-    >>> with open('example2.tsv', 'w') as f:
-    ...     f.write(s2)
-    >>> a2 = read_from_filename('example2.tsv', delimiter='\t')
-    >>> a2
-    array([(1. , 10, b'alpha'), (2.3, 25, b'beta'), (4.5, 16, b'gamma')],
-          dtype=[('f0', '<f8'), ('f1', 'u1'), ('f2', 'S5')])
     """
     # Handle special 'bytes' keyword for encoding
     byte_converters = False
@@ -1159,10 +1151,10 @@ def loadtxt(fname, dtype=float, comments='#', delimiter=None,
         while such lines are counted in `skiprows`.
 
         .. versionadded:: 1.16.0
-        
+
         .. versionchanged:: 1.23.0
-            Lines containing no data, including comment lines (e.g., lines 
-            starting with '#' or as specified via `comments`) are not counted 
+            Lines containing no data, including comment lines (e.g., lines
+            starting with '#' or as specified via `comments`) are not counted
             towards `max_rows`.
     quotechar : unicode character or None, optional
         The character used to denote the start and end of a quoted item.
@@ -1376,7 +1368,7 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='',
 
     Parameters
     ----------
-    fname : filename or file handle
+    fname : filename, file handle or pathlib.Path
         If the filename ends in ``.gz``, the file is automatically saved in
         compressed gzip format.  `loadtxt` understands gzipped files
         transparently.
@@ -1491,11 +1483,6 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='',
 
     """
 
-    # Py3 conversions first
-    if isinstance(fmt, bytes):
-        fmt = asstr(fmt)
-    delimiter = asstr(delimiter)
-
     class WriteWrap:
         """Convert to bytes on bytestream inputs.
 
@@ -1530,8 +1517,8 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='',
                 self.write = self.write_bytes
 
     own_fh = False
-    if isinstance(fname, os_PathLike):
-        fname = os_fspath(fname)
+    if isinstance(fname, os.PathLike):
+        fname = os.fspath(fname)
     if _is_string_like(fname):
         # datasource doesn't support creating a new file ...
         open(fname, 'wt').close()
@@ -1568,7 +1555,7 @@ def savetxt(fname, X, fmt='%.18e', delimiter=' ', newline='\n', header='',
         if type(fmt) in (list, tuple):
             if len(fmt) != ncol:
                 raise AttributeError('fmt has wrong shape.  %s' % str(fmt))
-            format = asstr(delimiter).join(map(asstr, fmt))
+            format = delimiter.join(fmt)
         elif isinstance(fmt, str):
             n_fmt_chars = fmt.count('%')
             error = ValueError('fmt has wrong number of %% formats:  %s' % fmt)
@@ -1627,7 +1614,7 @@ def fromregex(file, regexp, dtype, encoding=None):
 
     Parameters
     ----------
-    file : path or file
+    file : file, str, or pathlib.Path
         Filename or file object to read.
 
         .. versionchanged:: 1.22.0
@@ -1693,8 +1680,6 @@ def fromregex(file, regexp, dtype, encoding=None):
         content = file.read()
         if isinstance(content, bytes) and isinstance(regexp, str):
             regexp = asbytes(regexp)
-        elif isinstance(content, str) and isinstance(regexp, bytes):
-            regexp = asstr(regexp)
 
         if not hasattr(regexp, 'match'):
             regexp = re.compile(regexp)
@@ -1856,6 +1841,8 @@ def genfromtxt(fname, dtype=float, comments='#', delimiter=None,
       exception is raised).
     * Individual values are not stripped of spaces by default.
       When using a custom converter, make sure the function does remove spaces.
+    * Custom converters may receive unexpected values due to dtype
+      discovery. 
 
     References
     ----------
@@ -1955,8 +1942,8 @@ def genfromtxt(fname, dtype=float, comments='#', delimiter=None,
         byte_converters = False
 
     # Initialize the filehandle, the LineSplitter and the NameValidator
-    if isinstance(fname, os_PathLike):
-        fname = os_fspath(fname)
+    if isinstance(fname, os.PathLike):
+        fname = os.fspath(fname)
     if isinstance(fname, str):
         fid = np.lib._datasource.open(fname, 'rt', encoding=encoding)
         fid_ctx = contextlib.closing(fid)
@@ -2327,7 +2314,7 @@ def genfromtxt(fname, dtype=float, comments='#', delimiter=None,
                 "Reading unicode strings without specifying the encoding "
                 "argument is deprecated. Set the encoding, use None for the "
                 "system default.",
-                np.VisibleDeprecationWarning, stacklevel=2)
+                np.exceptions.VisibleDeprecationWarning, stacklevel=2)
             def encode_unicode_cols(row_tup):
                 row = list(row_tup)
                 for i in strcolidx:
@@ -2465,6 +2452,9 @@ def recfromtxt(fname, **kwargs):
     If ``usemask=False`` a standard `recarray` is returned,
     if ``usemask=True`` a MaskedRecords array is returned.
 
+    .. deprecated:: 2.0
+        Use `numpy.genfromtxt` instead.
+
     Parameters
     ----------
     fname, kwargs : For a description of input parameters, see `genfromtxt`.
@@ -2479,6 +2469,16 @@ def recfromtxt(fname, **kwargs):
     array will be determined from the data.
 
     """
+
+    # Deprecated in NumPy 2.0, 2023-07-11
+    warnings.warn(
+        "`recfromtxt` is deprecated, "
+        "use `numpy.genfromtxt` instead."
+        "(deprecated in NumPy 2.0)",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     kwargs.setdefault("dtype", None)
     usemask = kwargs.get('usemask', False)
     output = genfromtxt(fname, **kwargs)
@@ -2498,6 +2498,9 @@ def recfromcsv(fname, **kwargs):
     `recarray`) or a masked record array (if ``usemask=True``,
     see `ma.mrecords.MaskedRecords`).
 
+    .. deprecated:: 2.0
+        Use `numpy.genfromtxt` with comma as `delimiter` instead.
+
     Parameters
     ----------
     fname, kwargs : For a description of input parameters, see `genfromtxt`.
@@ -2512,6 +2515,16 @@ def recfromcsv(fname, **kwargs):
     array will be determined from the data.
 
     """
+
+    # Deprecated in NumPy 2.0, 2023-07-11
+    warnings.warn(
+        "`recfromcsv` is deprecated, "
+        "use `numpy.genfromtxt` with comma as `delimiter` instead. "
+        "(deprecated in NumPy 2.0)",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     # Set default kwargs for genfromtxt as relevant to csv import.
     kwargs.setdefault("case_sensitive", "lower")
     kwargs.setdefault("names", True)

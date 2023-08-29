@@ -71,10 +71,11 @@ NumPy provides several hooks that classes can customize:
    The method should return either the result of the operation, or
    :obj:`NotImplemented` if the operation requested is not implemented.
 
-   If one of the input or output arguments has a :func:`__array_ufunc__`
+   If one of the input, output, or ``where`` arguments has a :func:`__array_ufunc__`
    method, it is executed *instead* of the ufunc.  If more than one of the
    arguments implements :func:`__array_ufunc__`, they are tried in the
-   order: subclasses before superclasses, inputs before outputs, otherwise
+   order: subclasses before superclasses, inputs before outputs,
+   outputs before ``where``, otherwise
    left to right. The first routine returning something other than
    :obj:`NotImplemented` determines the result. If all of the
    :func:`__array_ufunc__` operations return :obj:`NotImplemented`, a
@@ -170,9 +171,9 @@ NumPy provides several hooks that classes can customize:
    -  The tuple ``args`` and dict ``kwargs`` are directly passed on from the
       original call.
 
-   As a convenience for ``__array_function__`` implementors, ``types``
+   As a convenience for ``__array_function__`` implementers, ``types``
    provides all argument types with an ``'__array_function__'`` attribute.
-   This allows implementors to quickly identify cases where they should defer
+   This allows implementers to quickly identify cases where they should defer
    to ``__array_function__`` implementations on other arguments.
    Implementations should not rely on the iteration order of ``types``.
 
@@ -315,11 +316,17 @@ NumPy provides several hooks that classes can customize:
 
 .. py:method:: class.__array__([dtype])
 
-   If a class (ndarray subclass or not) having the :func:`__array__`
-   method is used as the output object of an :ref:`ufunc
-   <ufuncs-output-type>`, results will *not* be written to the object
-   returned by :func:`__array__`. This practice will return ``TypeError``.
+    If defined on an object, should return an ``ndarray``.
+    This method is called by array-coercion functions like np.array()
+    if an object implementing this interface is passed to those functions.
+    Please refer to :ref:`Interoperability with NumPy <basics.interoperability>`
+    for the protocol hierarchy, of which ``__array__`` is the oldest and least
+    desirable.
 
+    .. note::  If a class (ndarray subclass or not) having the :func:`__array__`
+               method is used as the output object of an :ref:`ufunc
+               <ufuncs-output-type>`, results will *not* be written to the object
+               returned by :func:`__array__`. This practice will return ``TypeError``.
 
 .. _matrix-objects:
 
@@ -400,7 +407,7 @@ alias for "matrix "in NumPy.
 
 Example 1: Matrix creation from a string
 
->>> a = np.mat('1 2 3; 4 5 3')
+>>> a = np.asmatrix('1 2 3; 4 5 3')
 >>> print((a*a.T).I)
     [[ 0.29239766 -0.13450292]
      [-0.13450292  0.08187135]]
@@ -408,13 +415,13 @@ Example 1: Matrix creation from a string
 
 Example 2: Matrix creation from nested sequence
 
->>> np.mat([[1,5,10],[1.0,3,4j]])
+>>> np.asmatrix([[1,5,10],[1.0,3,4j]])
 matrix([[  1.+0.j,   5.+0.j,  10.+0.j],
         [  1.+0.j,   3.+0.j,   0.+4.j]])
 
 Example 3: Matrix creation from an array
 
->>> np.mat(np.random.rand(3,3)).T
+>>> np.asmatrix(np.random.rand(3,3)).T
 matrix([[4.17022005e-01, 3.02332573e-01, 1.86260211e-01],
         [7.20324493e-01, 1.46755891e-01, 3.45560727e-01],
         [1.14374817e-04, 9.23385948e-02, 3.96767474e-01]])
@@ -504,8 +511,8 @@ on item retrieval and comparison operations.
 
 .. _arrays.classes.rec:
 
-Record arrays (:mod:`numpy.rec`)
-================================
+Record arrays
+=============
 
 .. seealso:: :ref:`routines.array-creation.rec`, :ref:`routines.dtype`,
              :ref:`arrays.dtypes`.
@@ -521,6 +528,11 @@ scalar data type object :class:`record`.
 
    recarray
    record
+
+.. note::
+
+   The pandas DataFrame is more powerful than record array. If possible,
+   please use pandas DataFrame instead.
 
 Masked arrays (:mod:`numpy.ma`)
 ===============================
@@ -656,9 +668,9 @@ objects as inputs and returns an iterator that returns tuples
 providing each of the input sequence elements in the broadcasted
 result.
 
->>> for val in np.broadcast([[1,0],[2,3]],[0,1]):
+>>> for val in np.broadcast([[1, 0], [2, 3]], [0, 1]):
 ...     print(val)
-(1, 0)
-(0, 1)
-(2, 0)
-(3, 1)
+(np.int64(1), np.int64(0))
+(np.int64(0), np.int64(1))
+(np.int64(2), np.int64(0))
+(np.int64(3), np.int64(1))

@@ -217,7 +217,12 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
                 npyv_store_@sfx@((@type@*)dst, r0);
                 npyv_store_@sfx@((@type@*)(dst + vstep), r1);
             }
-            for (; len > 0; len -= hstep, src0 += vstep, dst += vstep) {
+        #if (@is_div@ || @is_mul@) && WORKAROUND_CLANG_PARTIAL_LOAD_BUG
+            const int vstop = hstep - 1;
+        #else
+            const int vstop = 0;
+        #endif // #if (@is_div@ || @is_mul@) && WORKAROUND_CLANG_PARTIAL_LOAD_BUG
+            for (; len > vstop; len -= hstep, src0 += vstep, dst += vstep) {
             #if @is_div@ || @is_mul@
                 npyv_@sfx@ a = npyv_load_till_@sfx@((const @type@*)src0, len, 1.0@c@);
             #else
@@ -226,6 +231,14 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
                 npyv_@sfx@ r = npyv_@intrin@_@sfx@(a, b);
                 npyv_store_till_@sfx@((@type@*)dst, len, r);
             }
+        #if (@is_div@ || @is_mul@) && WORKAROUND_CLANG_PARTIAL_LOAD_BUG
+            // last partial iteration for multiply / divide and working around clang partial load bug
+            if(len > 0){
+                volatile npyv_@sfx@ a = npyv_load_till_@sfx@((const @type@*)src0, len, 1.0@c@);
+                npyv_@sfx@ r = npyv_@intrin@_@sfx@(a, b);
+                npyv_store_till_@sfx@((@type@*)dst, len, r);
+            }
+        #endif // #if (@is_div@ || @is_mul@) && WORKAROUND_CLANG_PARTIAL_LOAD_BUG
         } else {
             goto loop_scalar;
         }
@@ -245,14 +258,19 @@ NPY_NO_EXPORT int NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@_indexed)
 (PyArrayMethod_Context *NPY_UNUSED(context), char * const*args, npy_intp const *dimensions, npy_intp const *steps, NpyAuxData *NPY_UNUSED(func))
 {
     char *ip1 = args[0];
-    char *indx = args[1];
+    char *indxp = args[1];
     char *value = args[2];
     npy_intp is1 = steps[0], isindex = steps[1], isb = steps[2];
+    npy_intp shape = steps[3];
     npy_intp n = dimensions[0];
     npy_intp i;
     @type@ *indexed;
-    for(i = 0; i < n; i++, indx += isindex, value += isb) {
-        indexed = (@type@ *)(ip1 + is1 * *(npy_intp *)indx);
+    for(i = 0; i < n; i++, indxp += isindex, value += isb) {
+        npy_intp indx = *(npy_intp *)indxp;
+        if (indx < 0) {
+            indx += shape;
+        }
+        indexed = (@type@ *)(ip1 + is1 * indx);
         *indexed = *indexed @OP@ *(@type@ *)value;
     }
     return 0;
@@ -637,14 +655,19 @@ NPY_NO_EXPORT int NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@_indexed)
 (PyArrayMethod_Context *NPY_UNUSED(context), char * const*args, npy_intp const *dimensions, npy_intp const *steps, NpyAuxData *NPY_UNUSED(func))
 {
     char *ip1 = args[0];
-    char *indx = args[1];
+    char *indxp = args[1];
     char *value = args[2];
     npy_intp is1 = steps[0], isindex = steps[1], isb = steps[2];
+    npy_intp shape = steps[3];
     npy_intp n = dimensions[0];
     npy_intp i;
     @ftype@ *indexed;
-    for(i = 0; i < n; i++, indx += isindex, value += isb) {
-        indexed = (@ftype@ *)(ip1 + is1 * *(npy_intp *)indx);
+    for(i = 0; i < n; i++, indxp += isindex, value += isb) {
+        npy_intp indx = *(npy_intp *)indxp;
+        if (indx < 0) {
+            indx += shape;
+        }
+        indexed = (@ftype@ *)(ip1 + is1 * indx);
         const @ftype@ b_r = ((@ftype@ *)value)[0];
         const @ftype@ b_i = ((@ftype@ *)value)[1];
     #if @is_mul@

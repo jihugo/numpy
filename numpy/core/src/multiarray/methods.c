@@ -28,6 +28,7 @@
 #include "strfuncs.h"
 #include "array_assign.h"
 #include "npy_dlpack.h"
+#include "multiarraymodule.h"
 
 #include "methods.h"
 #include "alloc.h"
@@ -62,34 +63,45 @@ NpyArg_ParseKeywords(PyObject *keys, const char *format, char **kwlist, ...)
 
 
 /*
- * Forwards an ndarray method to a the Python function
- * numpy.core._methods.<name>(...)
+ * Forwards a method call to a Python function while adding `self`:
+ * callable(self, ...)
  */
 static PyObject *
-forward_ndarray_method(PyArrayObject *self, PyObject *args, PyObject *kwds,
-                            PyObject *forwarding_callable)
+npy_forward_method(
+        PyObject *callable, PyObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
-    PyObject *sargs, *ret;
-    int i, n;
+    PyObject *args_buffer[NPY_MAXARGS];
+    /* Practically guaranteed NPY_MAXARGS is enough. */
+    PyObject **new_args = args_buffer;
 
-    /* Combine 'self' and 'args' together into one tuple */
-    n = PyTuple_GET_SIZE(args);
-    sargs = PyTuple_New(n + 1);
-    if (sargs == NULL) {
-        return NULL;
-    }
-    Py_INCREF(self);
-    PyTuple_SET_ITEM(sargs, 0, (PyObject *)self);
-    for (i = 0; i < n; ++i) {
-        PyObject *item = PyTuple_GET_ITEM(args, i);
-        Py_INCREF(item);
-        PyTuple_SET_ITEM(sargs, i+1, item);
+    /*
+     * `PY_VECTORCALL_ARGUMENTS_OFFSET` seems never set, probably `args[-1]`
+     * is always `self` but do not rely on it unless Python documents that.
+     */
+    npy_intp len_kwargs = kwnames != NULL ? PyTuple_GET_SIZE(kwnames) : 0;
+    size_t original_arg_size = (len_args + len_kwargs) * sizeof(PyObject *);
+
+    if (NPY_UNLIKELY(len_args + len_kwargs > NPY_MAXARGS)) {
+        new_args = (PyObject **)PyMem_MALLOC(original_arg_size + sizeof(PyObject *));
+        if (new_args == NULL) {
+            /*
+             * If this fails Python uses `PY_VECTORCALL_ARGUMENTS_OFFSET` and
+             * we should probably add a fast-path for that (hopefully almost)
+             * always taken.
+             */
+            return PyErr_NoMemory();
+        }
     }
 
-    /* Call the function and return */
-    ret = PyObject_Call(forwarding_callable, sargs, kwds);
-    Py_DECREF(sargs);
-    return ret;
+    new_args[0] = self;
+    memcpy(&new_args[1], args, original_arg_size);
+    PyObject *res = PyObject_Vectorcall(callable, new_args, len_args+1, kwnames);
+
+    if (NPY_UNLIKELY(len_args + len_kwargs > NPY_MAXARGS)) {
+        PyMem_FREE(new_args);
+    }
+    return res;
 }
 
 /*
@@ -104,7 +116,7 @@ forward_ndarray_method(PyArrayObject *self, PyObject *args, PyObject *kwds,
         if (callable == NULL) { \
             return NULL; \
         } \
-        return forward_ndarray_method(self, args, kwds, callable)
+        return npy_forward_method(callable, (PyObject *)self, args, len_args, kwnames)
 
 
 static PyObject *
@@ -338,19 +350,22 @@ array_argmin(PyArrayObject *self,
 }
 
 static PyObject *
-array_max(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_max(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_amax");
 }
 
 static PyObject *
-array_min(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_min(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_amin");
 }
 
 static PyObject *
-array_ptp(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_ptp(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_ptp");
 }
@@ -436,7 +451,7 @@ PyArray_GetField(PyArrayObject *self, PyArray_Descr *typed, int offset)
             PyArray_BYTES(self) + offset,
             PyArray_FLAGS(self) & ~NPY_ARRAY_F_CONTIGUOUS,
             (PyObject *)self, (PyObject *)self,
-            0, 1);
+            _NPY_ARRAY_ALLOW_EMPTY_STRING);
     return ret;
 }
 
@@ -856,7 +871,7 @@ array_astype(PyArrayObject *self,
      * TODO: UNSAFE default for compatibility, I think
      *       switching to SAME_KIND by default would be good.
      */
-    npy_dtype_info dt_info;
+    npy_dtype_info dt_info = {NULL, NULL};
     NPY_CASTING casting = NPY_UNSAFE_CASTING;
     NPY_ORDER order = NPY_KEEPORDER;
     _PyArray_CopyMode forcecopy = 1;
@@ -923,29 +938,29 @@ array_astype(PyArrayObject *self,
 
     PyArrayObject *ret;
 
-    /* This steals the reference to dtype, so no DECREF of dtype */
+    /* This steals the reference to dtype */
+    Py_INCREF(dtype);
     ret = (PyArrayObject *)PyArray_NewLikeArray(
                                 self, order, dtype, subok);
     if (ret == NULL) {
-        return NULL;
-    }
-    /* NumPy 1.20, 2020-10-01 */
-    if ((PyArray_NDIM(self) != PyArray_NDIM(ret)) &&
-            DEPRECATE_FUTUREWARNING(
-                "casting an array to a subarray dtype "
-                "will not use broadcasting in the future, but cast each "
-                "element to the new dtype and then append the dtype's shape "
-                "to the new array. You can opt-in to the new behaviour, by "
-                "additional field to the cast: "
-                "`arr.astype(np.dtype([('f', dtype)]))['f']`.\n"
-                "This may lead to a different result or to current failures "
-                "succeeding.  "
-                "(FutureWarning since NumPy 1.20)") < 0) {
-        Py_DECREF(ret);
+        Py_DECREF(dtype);
         return NULL;
     }
 
-    if (PyArray_CopyInto(ret, self) < 0) {
+    /* Decrease the number of dimensions removing subarray ones again */
+    int out_ndim = PyArray_NDIM(ret);
+    PyArray_Descr *out_descr = PyArray_DESCR(ret);
+    if (out_ndim != PyArray_NDIM(self)) {
+        ((PyArrayObject_fields *)ret)->nd = PyArray_NDIM(self);
+        ((PyArrayObject_fields *)ret)->descr = dtype;
+    }
+    int success = PyArray_CopyInto(ret, self);
+
+    Py_DECREF(dtype);
+    ((PyArrayObject_fields *)ret)->nd = out_ndim;
+    ((PyArrayObject_fields *)ret)->descr = out_descr;
+
+    if (success < 0) {
         Py_DECREF(ret);
         return NULL;
     }
@@ -1102,7 +1117,7 @@ any_array_ufunc_overrides(PyObject *args, PyObject *kwds)
     int nin, nout;
     PyObject *out_kwd_obj;
     PyObject *fast;
-    PyObject **in_objs, **out_objs;
+    PyObject **in_objs, **out_objs, *where_obj;
 
     /* check inputs */
     nin = PyTuple_Size(args);
@@ -1121,6 +1136,9 @@ any_array_ufunc_overrides(PyObject *args, PyObject *kwds)
         }
     }
     Py_DECREF(fast);
+    if (kwds == NULL) {
+        return 0;
+    }
     /* check outputs, if any */
     nout = PyUFuncOverride_GetOutObjects(kwds, &out_kwd_obj, &out_objs);
     if (nout < 0) {
@@ -1133,6 +1151,17 @@ any_array_ufunc_overrides(PyObject *args, PyObject *kwds)
         }
     }
     Py_DECREF(out_kwd_obj);
+    /* check where if it exists */
+    where_obj = PyDict_GetItemWithError(kwds, npy_ma_str_where);
+    if (where_obj == NULL) {
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+    } else {
+        if (PyUFunc_HasOverride(where_obj)){
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -2333,14 +2362,16 @@ PyArray_Dumps(PyObject *self, int protocol)
 
 
 static PyObject *
-array_dump(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_dump(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_dump");
 }
 
 
 static PyObject *
-array_dumps(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_dumps(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_dumps");
 }
@@ -2391,13 +2422,15 @@ array_transpose(PyArrayObject *self, PyObject *args)
 #define _CHKTYPENUM(typ) ((typ) ? (typ)->type_num : NPY_NOTYPE)
 
 static PyObject *
-array_mean(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_mean(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_mean");
 }
 
 static PyObject *
-array_sum(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_sum(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_sum");
 }
@@ -2426,7 +2459,8 @@ array_cumsum(PyArrayObject *self, PyObject *args, PyObject *kwds)
 }
 
 static PyObject *
-array_prod(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_prod(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_prod");
 }
@@ -2485,26 +2519,30 @@ array_dot(PyArrayObject *self,
 
 
 static PyObject *
-array_any(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_any(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_any");
 }
 
 
 static PyObject *
-array_all(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_all(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_all");
 }
 
 static PyObject *
-array_stddev(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_stddev(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_std");
 }
 
 static PyObject *
-array_variance(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_variance(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_var");
 }
@@ -2584,7 +2622,8 @@ array_trace(PyArrayObject *self,
 
 
 static PyObject *
-array_clip(PyArrayObject *self, PyObject *args, PyObject *kwds)
+array_clip(PyArrayObject *self,
+        PyObject *const *args, Py_ssize_t len_args, PyObject *kwnames)
 {
     NPY_FORWARD_NDARRAY_METHOD("_clip");
 }
@@ -2698,7 +2737,11 @@ array_setflags(PyArrayObject *self, PyObject *args, PyObject *kwds)
         return NULL;
 
     if (align_flag != Py_None) {
-        if (PyObject_Not(align_flag)) {
+        int isnot = PyObject_Not(align_flag);
+        if (isnot == -1) {
+            return NULL;
+        }
+        if (isnot) {
             PyArray_CLEARFLAGS(self, NPY_ARRAY_ALIGNED);
         }
         else if (IsAligned(self)) {
@@ -2713,7 +2756,11 @@ array_setflags(PyArrayObject *self, PyObject *args, PyObject *kwds)
     }
 
     if (uic != Py_None) {
-        if (PyObject_IsTrue(uic)) {
+        int istrue = PyObject_IsTrue(uic);
+        if (istrue == -1) {
+            return NULL;
+        }
+        if (istrue) {
             fa->flags = flagback;
             PyErr_SetString(PyExc_ValueError,
                             "cannot set WRITEBACKIFCOPY "
@@ -2728,7 +2775,11 @@ array_setflags(PyArrayObject *self, PyObject *args, PyObject *kwds)
     }
 
     if (write_flag != Py_None) {
-        if (PyObject_IsTrue(write_flag)) {
+        int istrue = PyObject_IsTrue(write_flag);
+        if (istrue == -1) {
+            return NULL;
+        }
+        else if (istrue == 1) {
             if (_IsWriteable(self)) {
                 /*
                  * _IsWritable (and PyArray_UpdateFlags) allows flipping this,
@@ -2792,9 +2843,7 @@ array_complex(PyArrayObject *self, PyObject *NPY_UNUSED(args))
     PyArray_Descr *dtype;
     PyObject *c;
 
-    if (PyArray_SIZE(self) != 1) {
-        PyErr_SetString(PyExc_TypeError,
-                "only length-1 arrays can be converted to Python scalars");
+    if (check_is_convertible_to_scalar(self) < 0) {
         return NULL;
     }
 
@@ -2897,10 +2946,10 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
         METH_VARARGS, NULL},
     {"dumps",
         (PyCFunction) array_dumps,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"dump",
         (PyCFunction) array_dump,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
 
     {"__complex__",
         (PyCFunction) array_complex,
@@ -2918,10 +2967,10 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
     /* Original and Extended methods added 2005 */
     {"all",
         (PyCFunction)array_all,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"any",
         (PyCFunction)array_any,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"argmax",
         (PyCFunction)array_argmax,
         METH_FASTCALL | METH_KEYWORDS, NULL},
@@ -2945,7 +2994,7 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
         METH_VARARGS | METH_KEYWORDS, NULL},
     {"clip",
         (PyCFunction)array_clip,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"compress",
         (PyCFunction)array_compress,
         METH_VARARGS | METH_KEYWORDS, NULL},
@@ -2987,13 +3036,13 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
         METH_VARARGS, NULL},
     {"max",
         (PyCFunction)array_max,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"mean",
         (PyCFunction)array_mean,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"min",
         (PyCFunction)array_min,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"newbyteorder",
         (PyCFunction)array_newbyteorder,
         METH_VARARGS, NULL},
@@ -3005,10 +3054,10 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
         METH_FASTCALL | METH_KEYWORDS, NULL},
     {"prod",
         (PyCFunction)array_prod,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"ptp",
         (PyCFunction)array_ptp,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"put",
         (PyCFunction)array_put,
         METH_VARARGS | METH_KEYWORDS, NULL},
@@ -3044,10 +3093,10 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
         METH_FASTCALL | METH_KEYWORDS, NULL},
     {"std",
         (PyCFunction)array_stddev,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"sum",
         (PyCFunction)array_sum,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"swapaxes",
         (PyCFunction)array_swapaxes,
         METH_VARARGS, NULL},
@@ -3074,7 +3123,7 @@ NPY_NO_EXPORT PyMethodDef array_methods[] = {
         METH_VARARGS, NULL},
     {"var",
         (PyCFunction)array_variance,
-        METH_VARARGS | METH_KEYWORDS, NULL},
+        METH_FASTCALL | METH_KEYWORDS, NULL},
     {"view",
         (PyCFunction)array_view,
         METH_FASTCALL | METH_KEYWORDS, NULL},

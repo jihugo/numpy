@@ -728,7 +728,7 @@ def einsum_path(*operands, optimize='greedy', einsum_call=False):
         * if False no optimization is taken
         * if True defaults to the 'greedy' algorithm
         * 'optimal' An algorithm that combinatorially explores all possible
-          ways of contracting the listed tensors and choosest the least costly
+          ways of contracting the listed tensors and chooses the least costly
           path. Scales exponentially with the number of terms in the
           contraction.
         * 'greedy' An algorithm that chooses the best pair contraction
@@ -1051,12 +1051,12 @@ def einsum(*operands, out=None, optimize=False, **kwargs):
         Controls what kind of data casting may occur.  Setting this to
         'unsafe' is not recommended, as it can adversely affect accumulations.
 
-          * 'no' means the data types should not be cast at all.
-          * 'equiv' means only byte-order changes are allowed.
-          * 'safe' means only casts which can preserve values are allowed.
-          * 'same_kind' means only safe casts or casts within a kind,
-            like float64 to float32, are allowed.
-          * 'unsafe' means any data conversions may be done.
+        * 'no' means the data types should not be cast at all.
+        * 'equiv' means only byte-order changes are allowed.
+        * 'safe' means only casts which can preserve values are allowed.
+        * 'same_kind' means only safe casts or casts within a kind,
+          like float64 to float32, are allowed.
+        * 'unsafe' means any data conversions may be done.
 
         Default is 'safe'.
     optimize : {False, True, 'greedy', 'optimal'}, optional

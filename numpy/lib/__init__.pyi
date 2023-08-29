@@ -40,56 +40,6 @@ from numpy.lib.arrayterator import (
     Arrayterator as Arrayterator,
 )
 
-from numpy.lib.function_base import (
-    select as select,
-    piecewise as piecewise,
-    trim_zeros as trim_zeros,
-    copy as copy,
-    iterable as iterable,
-    percentile as percentile,
-    diff as diff,
-    gradient as gradient,
-    angle as angle,
-    unwrap as unwrap,
-    sort_complex as sort_complex,
-    disp as disp,
-    flip as flip,
-    rot90 as rot90,
-    extract as extract,
-    place as place,
-    vectorize as vectorize,
-    asarray_chkfinite as asarray_chkfinite,
-    average as average,
-    bincount as bincount,
-    digitize as digitize,
-    cov as cov,
-    corrcoef as corrcoef,
-    median as median,
-    sinc as sinc,
-    hamming as hamming,
-    hanning as hanning,
-    bartlett as bartlett,
-    blackman as blackman,
-    kaiser as kaiser,
-    trapz as trapz,
-    i0 as i0,
-    add_newdoc as add_newdoc,
-    add_docstring as add_docstring,
-    meshgrid as meshgrid,
-    delete as delete,
-    insert as insert,
-    append as append,
-    interp as interp,
-    add_newdoc_ufunc as add_newdoc_ufunc,
-    quantile as quantile,
-)
-
-from numpy.lib.histograms import (
-    histogram_bin_edges as histogram_bin_edges,
-    histogram as histogram,
-    histogramdd as histogramdd,
-)
-
 from numpy.lib.index_tricks import (
     ravel_multi_index as ravel_multi_index,
     unravel_index as unravel_index,
@@ -103,23 +53,6 @@ from numpy.lib.index_tricks import (
     fill_diagonal as fill_diagonal,
     diag_indices as diag_indices,
     diag_indices_from as diag_indices_from,
-)
-
-from numpy.lib.nanfunctions import (
-    nansum as nansum,
-    nanmax as nanmax,
-    nanmin as nanmin,
-    nanargmax as nanargmax,
-    nanargmin as nanargmin,
-    nanmean as nanmean,
-    nanmedian as nanmedian,
-    nanpercentile as nanpercentile,
-    nanvar as nanvar,
-    nanstd as nanstd,
-    nanprod as nanprod,
-    nancumsum as nancumsum,
-    nancumprod as nancumprod,
-    nanquantile as nanquantile,
 )
 
 from numpy.lib.npyio import (
@@ -149,7 +82,6 @@ from numpy.lib.polynomial import (
     polydiv as polydiv,
     polyval as polyval,
     polyfit as polyfit,
-    RankWarning as RankWarning,
     poly1d as poly1d,
 )
 
@@ -196,21 +128,6 @@ from numpy.lib.twodim_base import (
     triu_indices_from as triu_indices_from,
 )
 
-from numpy.lib.type_check import (
-    mintypecode as mintypecode,
-    asfarray as asfarray,
-    real as real,
-    imag as imag,
-    iscomplex as iscomplex,
-    isreal as isreal,
-    iscomplexobj as iscomplexobj,
-    isrealobj as isrealobj,
-    nan_to_num as nan_to_num,
-    real_if_close as real_if_close,
-    typename as typename,
-    common_type as common_type,
-)
-
 from numpy.lib.ufunclike import (
     fix as fix,
     isposinf as isposinf,
@@ -218,23 +135,19 @@ from numpy.lib.ufunclike import (
 )
 
 from numpy.lib.utils import (
-    issubclass_ as issubclass_,
-    issubsctype as issubsctype,
-    issubdtype as issubdtype,
-    deprecate as deprecate,
-    deprecate_with_doc as deprecate_with_doc,
     get_include as get_include,
     info as info,
-    source as source,
-    who as who,
-    lookfor as lookfor,
     byte_bounds as byte_bounds,
-    safe_eval as safe_eval,
     show_runtime as show_runtime,
 )
 
 from numpy.core.multiarray import (
+    add_docstring as add_docstring,
     tracemalloc_domain as tracemalloc_domain,
+)
+
+from numpy.core.function_base import (
+    add_newdoc as add_newdoc,
 )
 
 __all__: list[str]
